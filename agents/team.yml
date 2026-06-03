@@ -1,0 +1,43 @@
+# Team roster and dispatcher policy for this Pi Agent configuration template.
+# Specialists should edit only their owned domain plus directly related
+# interface/README documentation. Cross-domain work should be split into
+# per-owner dispatch tasks and integrated by the orchestrator.
+# Dispatch policy: when more than one independent owner is involved, dispatch
+# tasks in parallel via dispatch_to_specialist.tasks by default; use single-task
+# dispatch only for sequential dependencies or one-owner work.
+agents:
+  - name: orchestrator
+    description: Routing, coordination, integration review, and cross-domain handoff for template-based projects.
+    prompt: agents/orchestrator.md
+    tools:
+      - read
+      - bash
+
+  - name: pi-pi
+    description: Pi Agent infrastructure owner for agents, skills, prompts, extensions, settings, themes, and dispatcher behavior.
+    prompt: agents/pi-pi.md
+    tools:
+      - read
+      - bash
+      - edit
+      - write
+
+  - name: backend-dev
+    description: Example backend specialist for API, service, database, and server-side implementation work.
+    prompt: agents/backend-dev.md
+    skill: skills/backend-dev.md
+    tools:
+      - read
+      - bash
+      - edit
+      - write
+
+  - name: frontend-dev
+    description: Example frontend specialist for UI, client-side state, styling, and API integration work.
+    prompt: agents/frontend-dev.md
+    skill: skills/frontend-dev.md
+    tools:
+      - read
+      - bash
+      - edit
+      - write

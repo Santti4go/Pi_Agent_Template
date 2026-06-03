@@ -1,0 +1,6 @@
+{
+  "extensions": ["../extensions"],
+  "skills": ["../skills"],
+  "themes": ["../themes"],
+  "enableSkillCommands": true
+}
