@@ -39,7 +39,7 @@ type DispatcherDetails = {
   results: DispatchResult[];
 };
 
-type AgentStatus = "idle" | "working" | "done" | "error";
+type AgentStatus = "idle" | "working" | "researching" | "done" | "error";
 
 const CHILD_ENV = "PI_AGENT_DISPATCHER_CHILD";
 const ACTIVE_AGENT_ENV = "PI_AGENT_ACTIVE_AGENT";
@@ -49,6 +49,7 @@ const THEME_DIR = "themes";
 const DOT_PI_THEME_DIR = path.join(".pi", "themes");
 const THEME_NAME = "pi-dispatcher";
 const GRID_THEME_NAME = "pi-dispatcher-grid";
+const AGENT_THEME_NAME = "pi-dispatcher-agent";
 const MAX_PARALLEL_TASKS = 6;
 const MAX_CONCURRENCY = 3;
 const OUTPUT_CAP_BYTES = 40 * 1024;
@@ -398,8 +399,8 @@ function fitCell(text: string, width: number): string {
  * Returns colored indicator formatting for the agent status cell.
  */
 function statusStyle(theme: any, status: AgentStatus): string {
-  const icon = status === "idle" ? "○" : status === "working" ? "◉" : status === "done" ? "✓" : "✗";
-  const color = status === "idle" ? "dim" : status === "working" ? "accent" : status === "done" ? "success" : "error";
+  const icon = status === "idle" ? "○" : status === "working" || status === "researching" ? "◉" : status === "done" ? "✓" : "✗";
+  const color = status === "idle" ? "dim" : status === "working" || status === "researching" ? "accent" : status === "done" ? "success" : "error";
   return theme.fg(color, `${icon} ${status}`);
 }
 
@@ -408,7 +409,7 @@ function statusIcon(theme: any, status: AgentStatus): string {
   const BLINK_OFF = "\x1b[25m";
 
   if (status === "idle") return theme.fg("dim", "○");
-  if (status === "working") return `${BLINK_ON}${theme.fg("accent", "◉")}${BLINK_OFF}`;
+  if (status === "working" || status === "researching") return `${BLINK_ON}${theme.fg("accent", "◉")}${BLINK_OFF}`;
   if (status === "done") return theme.fg("success", "✓");
   return theme.fg("error", "✗");
 }
@@ -417,23 +418,63 @@ function isGridTheme(theme: any): boolean {
   return theme?.name === GRID_THEME_NAME;
 }
 
+function isAgentTheme(theme: any): boolean {
+  return theme?.name === AGENT_THEME_NAME;
+}
+
+const AGENT_CARD_COLORS: Record<string, { bg: string; br: string }> = {
+  orchestrator: { bg: "\x1b[48;2;42;28;82m", br: "\x1b[38;2;140;100;225m" },
+  "pi-pi": { bg: "\x1b[48;2;80;18;62m", br: "\x1b[38;2;210;55;160m" },
+  "backend-dev": { bg: "\x1b[48;2;20;35;80m", br: "\x1b[38;2;70;120;220m" },
+  "frontend-dev": { bg: "\x1b[48;2;80;50;12m", br: "\x1b[38;2;220;150;42m" },
+};
+const FG_RESET = "\x1b[39m";
+const BG_RESET = "\x1b[49m";
+
 function renderDispatcherCard(theme: any, agent: TeamAgent, status: AgentStatus, cardWidth: number): string[] {
   const innerWidth = Math.max(1, cardWidth - 2);
-  const bg = (text: string) => theme.bg("toolErrorBg", text);
-  const borderColor = status === "error" ? "error" : status === "done" ? "success" : status === "working" ? "accent" : "error";
-  const border = (text: string) => bg(theme.fg(borderColor, text));
-  const row = (content: string) => bg(`${theme.fg(borderColor, "│")}${fitCell(content, innerWidth)}${theme.fg(borderColor, "│")}`);
+  const colors = AGENT_CARD_COLORS[agent.name] ?? { bg: "\x1b[48;2;45;45;45m", br: "\x1b[38;2;150;150;150m" };
+  const isActive = status === "working" || status === "researching";
+  const h = isActive ? "┄" : "─";
+  const v = isActive ? "┆" : "│";
+  const border = (text: string) => `${colors.bg}${colors.br}${text}${BG_RESET}${FG_RESET}`;
+  const row = (content: string) => {
+    const fitted = truncateToWidth(content, innerWidth);
+    const pad = " ".repeat(Math.max(0, innerWidth - visibleWidth(fitted)));
+    return `${colors.bg}${colors.br}${v}${FG_RESET}${colors.bg}${fitted}${colors.bg}${pad}${colors.br}${v}${BG_RESET}${FG_RESET}`;
+  };
   const name = theme.fg("text", theme.bold(agent.name));
   const statusModel = `${statusIcon(theme, status)}${agent.model ? theme.fg("muted", " | ") + theme.fg("muted", agent.model) : ""}`;
   const description = theme.fg("muted", truncateToWidth(agent.description, innerWidth));
 
   return [
-    border(`┌${"─".repeat(innerWidth)}┐`),
+    border(`┌${h.repeat(innerWidth)}┐`),
     row(name),
     row(statusModel),
     row(description),
-    border(`└${"─".repeat(innerWidth)}┘`),
+    border(`└${h.repeat(innerWidth)}┘`),
   ];
+}
+
+function wrapPlainText(text: string, width: number): string[] {
+  const maxWidth = Math.max(1, width);
+  const lines: string[] = [];
+  for (const rawLine of text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\t/g, "  ").split("\n")) {
+    let remaining = rawLine.trimEnd();
+    if (!remaining) {
+      lines.push("");
+      continue;
+    }
+    while (visibleWidth(remaining) > maxWidth) {
+      let slice = truncateToWidth(remaining, maxWidth);
+      const breakAt = slice.lastIndexOf(" ");
+      if (breakAt > Math.floor(maxWidth * 0.45)) slice = slice.slice(0, breakAt);
+      lines.push(slice.trimEnd());
+      remaining = remaining.slice(slice.length).trimStart();
+    }
+    lines.push(remaining);
+  }
+  return lines;
 }
 
 function dispatcherGridLines(theme: any, agents: TeamAgent[], statuses: Map<string, AgentStatus>, width: number): string[] {
@@ -472,6 +513,66 @@ function dispatcherGridLines(theme: any, agents: TeamAgent[], statuses: Map<stri
     }
   }
 
+  return lines;
+}
+
+function dispatcherSelectedAgentLines(
+  theme: any,
+  agents: TeamAgent[],
+  statuses: Map<string, AgentStatus>,
+  latestResults: Map<string, DispatchResult>,
+  selectedAgentIndex: number,
+  width: number,
+): string[] {
+  if (width < 20) return [truncateToWidth(theme.fg("accent", "Agent work"), width)];
+
+  const outerWidth = width - 1;
+  const innerWidth = Math.max(1, outerWidth - 2);
+  const agentsWithWork = agents.filter((agent) => latestResults.has(agent.name));
+  const visibleAgents = agentsWithWork.length ? agentsWithWork : agents;
+  const selected = visibleAgents.length ? visibleAgents[selectedAgentIndex % visibleAgents.length] : undefined;
+  const result = selected ? latestResults.get(selected.name) : undefined;
+  const status = selected ? statuses.get(selected.name) ?? "idle" : "idle";
+  const colors = selected ? AGENT_CARD_COLORS[selected.name] ?? { bg: "\x1b[48;2;45;45;45m", br: "\x1b[38;2;150;150;150m" } : undefined;
+  const bg = colors?.bg ?? "";
+  const br = colors?.br ?? "";
+  const border = (text: string) => `${bg}${br}${text}${BG_RESET}${FG_RESET}`;
+  const row = (content: string) => {
+    const fitted = truncateToWidth(content, innerWidth);
+    const pad = " ".repeat(Math.max(0, innerWidth - visibleWidth(fitted)));
+    return `${bg}${br}│${FG_RESET}${bg}${fitted}${bg}${pad}${br}│${BG_RESET}${FG_RESET}`;
+  };
+
+  const titleText = selected
+    ? ` ${selected.name} ${visibleAgents.indexOf(selected) + 1}/${visibleAgents.length} · ${status}${result ? ` · exit ${result.exitCode}` : ""} `
+    : " Agent work ";
+  const title = `${titleText}${"─".repeat(Math.max(0, innerWidth - visibleWidth(titleText)))}`;
+  const lines = [border(`┌${truncateToWidth(title, innerWidth)}┐`)];
+
+  if (!selected) {
+    lines.push(row(theme.fg("dim", "No specialists found.")));
+    lines.push(border(`└${"─".repeat(innerWidth)}┘`));
+    return lines;
+  }
+
+  const work = result?.output || (status === "working" ? "(specialist is still working; summary will appear when it returns)" : "(no returned work for this agent yet)");
+  const stderr = result?.stderr ? `\n\nStderr:\n${capOutput(result.stderr)}` : "";
+  const bodyLines = wrapPlainText(`${work}${stderr}`.trim(), innerWidth - 2);
+  const maxBodyLines = 12;
+
+  lines.push(row(`${statusIcon(theme, status)} ${theme.fg("text", theme.bold(selected.name))}${selected.model ? theme.fg("muted", ` · ${selected.model}`) : ""}`));
+  lines.push(row(theme.fg("muted", truncateToWidth(selected.description, innerWidth - 2))));
+  lines.push(border(`├${"─".repeat(innerWidth)}┤`));
+
+  for (const bodyLine of bodyLines.slice(0, maxBodyLines)) {
+    lines.push(row(` ${bodyLine}`));
+  }
+  if (bodyLines.length > maxBodyLines) {
+    lines.push(row(theme.fg("dim", ` … ${bodyLines.length - maxBodyLines} more line(s)`)));
+  }
+  lines.push(border(`├${"─".repeat(innerWidth)}┤`));
+  lines.push(row(theme.fg("dim", " alt+3 next agent with returned work")));
+  lines.push(border(`└${"─".repeat(innerWidth)}┘`));
   return lines;
 }
 
@@ -526,7 +627,7 @@ function dispatcherTableLines(theme: any, agents: TeamAgent[], statuses: Map<str
 /**
  * Mounts the dispatcher status indicator and table widgets into the UI.
  */
-function installDispatcherUi(ctx: any, statuses: Map<string, AgentStatus>): void {
+function installDispatcherUi(ctx: any, statuses: Map<string, AgentStatus>, latestResults: Map<string, DispatchResult>, selectedAgentIndex: number): void {
   if (!ctx.hasUI) return;
 
   let agents: TeamAgent[] = [];
@@ -538,6 +639,7 @@ function installDispatcherUi(ctx: any, statuses: Map<string, AgentStatus>): void
 
   ctx.ui.setWidget("pi-dispatcher-team", (_tui: any, theme: any) => ({
     render(width: number) {
+      if (isAgentTheme(theme)) return dispatcherSelectedAgentLines(theme, agents, statuses, latestResults, selectedAgentIndex, width);
       return isGridTheme(theme) ? dispatcherGridLines(theme, agents, statuses, width) : dispatcherTableLines(theme, agents, statuses, width);
     },
     invalidate() { },
@@ -557,12 +659,11 @@ function setDispatcherTheme(ctx: any, themeName: string): void {
   ctx.ui.notify(`Dispatcher theme: ${themeName}`, "info");
 }
 
-function toggleDispatcherTheme(ctx: any): void {
-  const nextTheme = ctx.ui.theme?.name === GRID_THEME_NAME ? THEME_NAME : GRID_THEME_NAME;
-  setDispatcherTheme(ctx, nextTheme);
-}
-
-function registerDispatcherShortcuts(pi: ExtensionAPI): void {
+function registerDispatcherShortcuts(
+  pi: ExtensionAPI,
+  state: { latestResults: Map<string, DispatchResult>; selectedAgentIndex: number },
+  refresh: (ctx: any) => void,
+): void {
   pi.registerShortcut("alt+1", {
     description: "Use dispatcher table theme",
     handler: async (ctx) => setDispatcherTheme(ctx, THEME_NAME),
@@ -571,6 +672,29 @@ function registerDispatcherShortcuts(pi: ExtensionAPI): void {
   pi.registerShortcut("alt+2", {
     description: "Use dispatcher grid theme",
     handler: async (ctx) => setDispatcherTheme(ctx, GRID_THEME_NAME),
+  });
+
+  pi.registerShortcut("alt+3", {
+    description: "Use dispatcher single-agent work summary / cycle selected agent",
+    handler: async (ctx) => {
+      if (!ctx.hasUI) return;
+      let agents: TeamAgent[] = [];
+      try {
+        agents = loadTeam(ctx.cwd).agents;
+      } catch {
+        ctx.ui.notify("Cannot load dispatcher agents", "warning");
+        return;
+      }
+      const agentsWithWork = agents.filter((agent) => state.latestResults.has(agent.name));
+      const visibleAgents = agentsWithWork.length ? agentsWithWork : agents;
+      if (ctx.ui.theme?.name === AGENT_THEME_NAME && visibleAgents.length) {
+        state.selectedAgentIndex = (state.selectedAgentIndex + 1) % visibleAgents.length;
+      } else {
+        state.selectedAgentIndex = 0;
+      }
+      setDispatcherTheme(ctx, AGENT_THEME_NAME);
+      refresh(ctx);
+    },
   });
 }
 
@@ -588,15 +712,17 @@ export default function(pi: ExtensionAPI) {
   if (isChild) return;
 
   const agentStatuses = new Map<string, AgentStatus>();
+  const agentSummaryState = { latestResults: new Map<string, DispatchResult>(), selectedAgentIndex: 0 };
+  const refreshDispatcherUi = (ctx: any) => installDispatcherUi(ctx, agentStatuses, agentSummaryState.latestResults, agentSummaryState.selectedAgentIndex);
 
-  registerDispatcherShortcuts(pi);
+  registerDispatcherShortcuts(pi, agentSummaryState, refreshDispatcherUi);
 
   pi.on("resources_discover", async (event) => ({
     themePaths: [resolveThemeDir(findProjectRoot(event.cwd))],
   }));
 
   pi.on("session_start", async (_event, ctx) => {
-    installDispatcherUi(ctx, agentStatuses);
+    refreshDispatcherUi(ctx);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
@@ -708,7 +834,7 @@ export default function(pi: ExtensionAPI) {
       const mode = hasSingle ? "single" : "parallel";
 
       const refreshUi = () => {
-        if (ctx.hasUI) installDispatcherUi(ctx, agentStatuses);
+        if (ctx.hasUI) refreshDispatcherUi(ctx);
       };
       for (const dispatch of dispatches) agentStatuses.set(dispatch.agent, "working");
       refreshUi();
@@ -717,7 +843,14 @@ export default function(pi: ExtensionAPI) {
       // Design Decision: Parallel execution limit. We control concurrency via mapWithLimit to prevent
       // potential API rate limits or excessive CPU/RAM usage from spawning too many child processes.
       const results = await mapWithLimit(dispatches, MAX_CONCURRENCY, async (dispatch) => {
-        const result = await runSpecialist(loaded.root, loaded.teamFile, loaded.agents, dispatch, parentModel, signal, onUpdate);
+        const result = await runSpecialist(loaded.root, loaded.teamFile, loaded.agents, dispatch, parentModel, signal, (partial) => {
+          for (const partialResult of partial.details?.results ?? []) {
+            agentSummaryState.latestResults.set(partialResult.agent, partialResult);
+          }
+          onUpdate?.(partial);
+          refreshUi();
+        });
+        agentSummaryState.latestResults.set(result.agent, result);
         agentStatuses.set(dispatch.agent, result.exitCode === 0 && !result.errorMessage ? "done" : "error");
         refreshUi();
         return result;

@@ -67,6 +67,12 @@
   "export": {
     "pageBg": "redBg",
     "cardBg": "redBg2",
-    "infoBg": "#401010"
+    "infoBg": "#401010",
+    "agentCards": {
+      "orchestrator": { "bg": "#2a1c52", "border": "#8c64e1" },
+      "pi-pi": { "bg": "#50123e", "border": "#d237a0" },
+      "backend-dev": { "bg": "#142350", "border": "#4678dc" },
+      "frontend-dev": { "bg": "#50320c", "border": "#dc962a" }
+    }
   }
 }
